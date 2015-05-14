@@ -6,6 +6,20 @@
  * @author Thibaut 'BKcore' Despoulain <http://bkcore.com>
  */
 
+/**
+ * RAF shim
+ */
+window.requestAnimFrame = (function(){
+  return  window.requestAnimationFrame       || 
+          window.webkitRequestAnimationFrame || 
+          window.mozRequestAnimationFrame    || 
+          window.oRequestAnimationFrame      || 
+          window.msRequestAnimationFrame     || 
+          function( callback ){
+            window.setTimeout(callback, 1000 / 60);
+          };
+})();
+
 /*!
  * @package bkcore
  */
@@ -45,6 +59,25 @@ bkcore.Timer.prototype.start = function()
 }
 
 /*!
+ * Restarts timer, returning last ms tick
+ */
+bkcore.Timer.prototype.restart = function()
+{
+	var now = new Date().getTime();
+	var e = now - this.time.start;
+
+	this.time.start = now;
+	this.time.current = now;
+	this.time.previous = now;
+	this.time.elapsed = 0;
+	this.time.delta = 0;
+
+	this.active = true;
+
+	return e;
+}
+
+/*!
  * Pauses(true)/Unpauses(false) the timer.
  *
  * @param bool Do pause
@@ -67,6 +100,16 @@ bkcore.Timer.prototype.update = function()
 	this.time.elapsed = this.time.current - this.time.start;
 	this.time.delta = now - this.time.previous;
 	this.time.previous = now;
+
+	return this.time.elapsed;
+}
+
+/*!
+ * Returns elapsed milliseconds
+ */
+bkcore.Timer.prototype.getElapsed = function()
+{
+	return this.time.elapsed;
 }
 
 /*!

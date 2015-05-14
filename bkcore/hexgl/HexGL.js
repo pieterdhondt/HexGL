@@ -1,7 +1,7 @@
  /*
  * HexGL
  * @author Thibaut 'BKcore' Despoulain <http://bkcore.com>
- * @license This work is licensed under the Creative Commons Attribution-NonCommercial 3.0 Unported License. 
+ * @license This work is licensed under the Creative Commons Attribution-NonCommercial 3.0 Unported License.
  *          To view a copy of this license, visit http://creativecommons.org/licenses/by-nc/3.0/.
  */
 
@@ -20,19 +20,29 @@ bkcore.hexgl.HexGL = function(opts)
 	this.a = window.location.href;
 
 	this.active = true;
-
+	this.displayHUD = opts.hud == undefined ? true : opts.hud;
 	this.width = opts.width == undefined ? window.innerWidth : opts.width;
 	this.height = opts.height == undefined ? window.innerHeight : opts.height;
-
-	this.quality = opts.quality == undefined ? 2 : opts.quality;
+	
 	this.difficulty = opts.difficulty == undefined ? 0 : opts.difficulty;
 	this.player = opts.player == undefined ? "Anonym" : opts.player;
 
-	this.half = opts.half == undefined ? false : opts.half;
-
 	this.track = bkcore.hexgl.tracks[ opts.track == undefined ? 'Cityscape' : opts.track ];
 
-	if(this.half)
+	this.mode = opts.mode == undefined ? 'timeattack' : opts.mode;
+
+	this.controlType = opts.controlType == undefined ? 1 : opts.controlType;
+	
+	// 0 == low, 1 == mid, 2 == high, 3 == very high
+	// the old platform+quality combinations map to these new quality values
+	// as follows:
+	// mobile + low quality => 0 (LOW)
+	// mobile + mid quality OR desktop + low quality => 1 (MID)
+	// mobile + high quality => 2 (HIGH)
+	// desktop + mid or high quality => 3 (VERY HIGH)
+	this.quality = opts.quality == undefined ? 3 : opts.quality;
+
+	if(this.quality === 0)
 	{
 		this.width /= 2;
 		this.height /=2;
@@ -54,6 +64,10 @@ bkcore.hexgl.HexGL = function(opts)
 	this.containers.main = opts.container == undefined ? document.body : opts.container;
 	this.containers.overlay = opts.overlay == undefined ? document.body : opts.overlay;
 
+	this.gameover = opts.gameover == undefined ? null : opts.gameover;
+
+	this.godmode = opts.godmode == undefined ? false : opts.godmode;
+
 	this.hud = null;
 
 	this.gameplay = null;
@@ -64,9 +78,9 @@ bkcore.hexgl.HexGL = function(opts)
 
 	this.initRenderer();
 
-	function onKeyPress(event) 
+	function onKeyPress(event)
 	{
-		if(event.keyCode == 27/*escape*/) 
+		if(event.keyCode == 27/*escape*/)
 		{
 			self.reset();
 		}
@@ -84,7 +98,7 @@ bkcore.hexgl.HexGL.prototype.start = function()
 
 	function raf()
 	{
-		requestAnimationFrame( raf );
+		if(self && self.active) requestAnimationFrame( raf );
 		self.update();
 	}
 
@@ -98,11 +112,18 @@ bkcore.hexgl.HexGL.prototype.reset = function()
 {
 	this.manager.get('game').objects.lowFPS = 0;
 	this.gameplay.start();
+
+	bkcore.Audio.stop('bg');
+	bkcore.Audio.stop('wind');
+	bkcore.Audio.volume('wind', 0.35);
+	bkcore.Audio.play('bg');
+	bkcore.Audio.play('wind');
 }
 
 bkcore.hexgl.HexGL.prototype.restart = function()
 {
-	this.document.getElementById('finish').style.display = 'none';
+	try{ this.document.getElementById('finish').style.display = 'none'; }
+	catch(e){};
 	this.reset();
 }
 
@@ -119,7 +140,7 @@ bkcore.hexgl.HexGL.prototype.update = function()
 bkcore.hexgl.HexGL.prototype.init = function()
 {
 	this.initHUD();
-
+	
 	this.track.buildMaterials(this.quality);
 
 	this.track.buildScenes(this, this.quality);
@@ -137,27 +158,46 @@ bkcore.hexgl.HexGL.prototype.initGameplay = function()
 	var self = this;
 
 	this.gameplay = new bkcore.hexgl.Gameplay({
-		mode: "timeattack",
+		mode: this.mode,
 		hud: this.hud,
 		shipControls: this.components.shipControls,
+		cameraControls: this.components.cameraChase,
 		analyser: this.track.analyser,
 		pixelRatio: this.track.pixelRatio,
-		track: {
-			checkpoints: this.track.checkpoints,
-			spawn: this.track.spawn,
-			spawnRotation: this.track.spawnRotation
-		},
+		track: this.track,
 		onFinish: function() {
+			self.components.shipControls.terminate();
 			self.displayScore(this.finishTime, this.lapTimes);
 		}
 	});
 
 	this.gameplay.start();
+
+	bkcore.Audio.play('bg');
+	bkcore.Audio.play('wind');
+	bkcore.Audio.volume('wind', 0.35);
 }
 
 bkcore.hexgl.HexGL.prototype.displayScore = function(f, l)
 {
-	var t = 'cityscape';
+	this.active = false;
+
+	var tf = bkcore.Timer.msToTimeString(f);
+	var tl = [
+		bkcore.Timer.msToTimeString(l[0]),
+		bkcore.Timer.msToTimeString(l[1]),
+		bkcore.Timer.msToTimeString(l[2])
+	];
+
+	if(this.gameover !== null)
+	{
+		this.gameover.style.display = "block";
+		this.gameover.children[0].innerHTML = tf.m + "'" + tf.s + "''" + tf.ms;
+		this.containers.main.parentElement.style.display = "none";
+		return;
+	}
+
+	var t = this.track;
 	var dc = this.document.getElementById("finish");
 	var ds = this.document.getElementById("finish-state");
 	var dh = this.document.getElementById("finish-hallmsg");
@@ -172,12 +212,6 @@ bkcore.hexgl.HexGL.prototype.displayScore = function(f, l)
 	var sl = this.document.getElementById("lowfps-msg");
 	var d = this.difficulty == 0 ? 'casual' : 'hard';
 	var ts = this.hud.timeSeparators;
-	var tf = bkcore.Timer.msToTimeString(f);
-	var tl = [
-		bkcore.Timer.msToTimeString(l[0]),
-		bkcore.Timer.msToTimeString(l[1]),
-		bkcore.Timer.msToTimeString(l[2])
-	];
 
 	if(this.gameplay.result == this.gameplay.results.FINISH)
 	{
@@ -189,6 +223,9 @@ bkcore.hexgl.HexGL.prototype.displayScore = function(f, l)
 			{
 				dr != undefined && (dr.innerHTML = "New local record!");
 				localStorage['score-'+t+'-'+d] = f;
+
+				// Export race data
+				localStorage['race-'+t+'-replay'] = JSON.Stringify(this.gameplay.raceData.export());
 			}
 			else
 			{
@@ -250,25 +287,30 @@ bkcore.hexgl.HexGL.prototype.initRenderer = function()
 		clearColor: 0x000000
 	});
 
-	renderer.physicallyBasedShading = true;
-	renderer.gammaInput = true;
-	renderer.gammaOutput = true;
-
-	renderer.shadowMapEnabled = true;
-	renderer.shadowMapSoft = true;
+	// desktop + quality mid or high
+	if(this.quality > 2)
+	{
+		renderer.physicallyBasedShading = true;
+		renderer.gammaInput = true;
+		renderer.gammaOutput = true;
+		renderer.shadowMapEnabled = true;
+		renderer.shadowMapSoft = true;
+	}
 
 	renderer.autoClear = false;
 	renderer.sortObjects = false;
 	renderer.setSize( this.width, this.height );
 	renderer.domElement.style.position = "relative";
 
-	this.containers.main.appendChild( renderer.domElement );	
+	this.containers.main.appendChild( renderer.domElement );
+	this.canvas = renderer.domElement;
 	this.renderer = renderer;
 	this.manager = new bkcore.threejs.RenderManager(renderer);
 }
 
 bkcore.hexgl.HexGL.prototype.initHUD = function()
 {
+	if(!this.displayHUD) return;
 	this.hud = new bkcore.hexgl.HUD({
 		width: this.width,
 		height: this.height,
@@ -276,7 +318,7 @@ bkcore.hexgl.HexGL.prototype.initHUD = function()
 		bg: this.track.lib.get("images", "hud.bg"),
 		speed: this.track.lib.get("images", "hud.speed"),
 		shield: this.track.lib.get("images", "hud.shield")
-	});	
+	});
 	this.containers.overlay.appendChild(this.hud.canvas);
 }
 
@@ -285,7 +327,7 @@ bkcore.hexgl.HexGL.prototype.initGameComposer = function()
 	var renderTargetParameters = { minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter, format: THREE.RGBFormat, stencilBuffer: false };
 	var renderTarget = new THREE.WebGLRenderTarget( this.width, this.height, renderTargetParameters );
 
-	// GAME COMPOSER	
+	// GAME COMPOSER
 	var renderSky = new THREE.RenderPass( this.manager.get("sky").scene, this.manager.get("sky").camera );
 
 	var renderModel = new THREE.RenderPass( this.manager.get("game").scene, this.manager.get("game").camera );
@@ -293,7 +335,8 @@ bkcore.hexgl.HexGL.prototype.initGameComposer = function()
 
 	this.composers.game = new THREE.EffectComposer( this.renderer, renderTarget );
 
-	var effectScreen = new THREE.ShaderPass( THREE.ShaderExtras[ "screen" ] );				
+	var effectScreen = new THREE.ShaderPass( THREE.ShaderExtras[ "screen" ] );
+	effectScreen.renderToScreen = true;
 	var effectVignette = new THREE.ShaderPass( THREE.ShaderExtras[ "vignette" ] );
 
 	var effectHex = new THREE.ShaderPass( bkcore.threejs.Shaders[ "hexvignette" ] );
@@ -308,17 +351,20 @@ bkcore.hexgl.HexGL.prototype.initGameComposer = function()
 	this.composers.game.addPass( renderSky );
 	this.composers.game.addPass( renderModel );
 
-	if(this.quality > 0)
-	{
-		var effectFXAA = new THREE.ShaderPass( THREE.ShaderExtras[ "fxaa" ] );
-		effectFXAA.uniforms[ 'resolution' ].value.set( 1 / this.width, 1 / this.height );
+	// if(this.quality > 0 && !this.mobile)
+	// {
+	// 	var effectFXAA = new THREE.ShaderPass( THREE.ShaderExtras[ "fxaa" ] );
+	// 	effectFXAA.uniforms[ 'resolution' ].value.set( 1 / this.width, 1 / this.height );
 
-		this.composers.game.addPass( effectFXAA );
-		
-		this.extras.fxaa = effectFXAA;
-	}
-	if(this.quality > 1)
-	{	
+	// 	this.composers.game.addPass( effectFXAA );
+
+	// 	this.extras.fxaa = effectFXAA;
+	
+	// }
+	
+	// desktop + quality mid or high
+	if(this.quality > 2)
+	{
 		var effectBloom = new THREE.BloomPass( 0.8, 25, 4 , 256);
 
 		this.composers.game.addPass( effectBloom );
@@ -326,12 +372,16 @@ bkcore.hexgl.HexGL.prototype.initGameComposer = function()
 		this.extras.bloom = effectBloom;
 	}
 
-	this.composers.game.addPass( effectHex );
-
-	
+	// desktop + quality low, mid or high
+	// OR
+	// mobile + quality mid or high
+	if(this.quality > 0)
+		this.composers.game.addPass( effectHex );
+	else
+		this.composers.game.addPass( effectScreen );
 }
 
-bkcore.hexgl.HexGL.prototype.createMesh = function(parent, geometry, x, y, z, mat) 
+bkcore.hexgl.HexGL.prototype.createMesh = function(parent, geometry, x, y, z, mat)
 {
 	geometry.computeTangents();
 
@@ -339,7 +389,8 @@ bkcore.hexgl.HexGL.prototype.createMesh = function(parent, geometry, x, y, z, ma
 	mesh.position.set( x, y, z );
 	parent.add(mesh);
 
-	if(this.quality > 0)
+	// desktop + quality mid or high
+	if(this.quality > 2)
 	{
 		mesh.castShadow = true;
 		mesh.receiveShadow = true;
@@ -389,4 +440,7 @@ bkcore.hexgl.HexGL.prototype.tweakShipControls = function()
 		c.driftLerp = 0.3;
 		c.angularLerp = 0.4;
 	}
+
+	if(this.godmode)
+		c.shieldDamage = 0.0;
 }

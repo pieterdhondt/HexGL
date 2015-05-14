@@ -1,19 +1,21 @@
  /*
  * HexGL
  * @author Thibaut 'BKcore' Despoulain <http://bkcore.com>
- * @license This work is licensed under the Creative Commons Attribution-NonCommercial 3.0 Unported License. 
+ * @license This work is licensed under the Creative Commons Attribution-NonCommercial 3.0 Unported License.
  *          To view a copy of this license, visit http://creativecommons.org/licenses/by-nc/3.0/.
  */
 
 var bkcore = bkcore || {};
 bkcore.hexgl = bkcore.hexgl || {};
 
-bkcore.hexgl.ShipControls = function(domElement)
+bkcore.hexgl.ShipControls = function(ctx)
 {
 	var self = this;
+	var domElement = ctx.document;
 
 	this.active = true;
 	this.destroyed = false;
+	this.falling = false;
 
 	this.dom = domElement;
 	this.mesh = null;
@@ -25,7 +27,7 @@ bkcore.hexgl.ShipControls = function(domElement)
 	this.thrust = 0.02;
 	this.airBrake = 0.02;
 	this.maxSpeed = 7.0;
-	this.boosterSpeed = this.maxSpeed * 0.4;
+	this.boosterSpeed = this.maxSpeed * 0.2;
 	this.boosterDecay = 0.01;
 	this.angularSpeed = 0.005;
 	this.airAngularSpeed = 0.0065;
@@ -73,7 +75,7 @@ bkcore.hexgl.ShipControls = function(domElement)
 	this.rollAngle = 0.6;
 	this.rollLerp = 0.08;
 	this.rollDirection = new THREE.Vector3(0,0,1);
-	
+
 	this.gradient = 0.0;
 	this.gradientTarget = 0.0;
 	this.gradientLerp = 0.05;
@@ -95,6 +97,8 @@ bkcore.hexgl.ShipControls = function(domElement)
 	this.repulsionAmount = 0.0;
 	this.repulsionForce = new THREE.Vector3();
 
+	this.fallVector = new THREE.Vector3(0,-20,0);
+
 	this.resetPos = null;
 	this.resetRot = null;
 
@@ -114,9 +118,139 @@ bkcore.hexgl.ShipControls = function(domElement)
 		right: false
 	};
 
-	function onKeyDown(event) 
+	this.touchController = null;
+	this.orientationController = null;
+	this.gamepadController = null
+
+	if(ctx.controlType == 1 && bkcore.controllers.TouchController.isCompatible())
 	{
-		switch(event.keyCode) 
+		this.touchController = new bkcore.controllers.TouchController(
+			domElement, ctx.width/2,
+			function(state, touch, event){
+				if(event.touches.length >= 4)
+					window.location.reload(false);
+				else if(event.touches.length == 3)
+					ctx.restart();
+				// touch was on the right-hand side of the screen
+				else if (touch.clientX > (ctx.width / 2)) {
+					if (event.type === 'touchend')
+						self.key.forward = false;
+					else
+						self.key.forward = true;
+				}
+			});
+	}
+	else if(ctx.controlType == 4 && bkcore.controllers.OrientationController.isCompatible())
+	{
+		this.orientationController = new bkcore.controllers.OrientationController(
+			domElement, true,
+			function(state, touch, event){
+				if(event.touches.length >= 4)
+					window.location.reload(false);
+				else if(event.touches.length == 3)
+					ctx.restart();
+				else if(event.touches.length < 1)
+					self.key.forward = false;
+				else
+					self.key.forward = true;
+			});
+	}
+	else if(ctx.controlType == 3 && bkcore.controllers.GamepadController.isCompatible())
+	{
+		this.gamepadController = new bkcore.controllers.GamepadController(
+      function(controller){
+        if (controller.select)
+          ctx.restart();
+        else
+          self.key.forward = controller.acceleration > 0;
+          self.key.ltrigger = controller.ltrigger > 0;
+          self.key.rtrigger = controller.rtrigger > 0;
+          self.key.left = controller.lstickx < -0.1;
+          self.key.right = controller.lstickx > 0.1;
+      });
+	}
+	else if(ctx.controlType == 2)
+	{
+		if(Leap == null)
+			throw new Error("Unable to reach LeapJS!");
+
+		var leapInfo = this.leapInfo = document.getElementById('leapinfo');
+		isServerConnected = false;
+		var lb = this.leapBridge = {
+			isConnected: true,
+			hasHands: false,
+			palmNormal: [0, 0, 0]
+		};
+
+		function updateInfo()
+		{
+			if(!isServerConnected)
+			{
+				leapInfo.innerHTML = 'Waiting for the Leap Motion Controller server...'
+				leapInfo.style.display = 'block';
+			}
+			else if(lb.isConnected && lb.hasHands)
+			{
+				leapInfo.style.display = 'none';
+			}
+			else if(!lb.isConnected)
+			{
+				leapInfo.innerHTML = 'Please connect your Leap Motion Controller.'
+				leapInfo.style.display = 'block';
+			}
+			else if(!lb.hasHands)
+			{
+				leapInfo.innerHTML = 'Put your hand over the Leap Motion Controller to play.'
+				leapInfo.style.display = 'block';
+			}
+		}
+		updateInfo();
+
+		var lc = this.leapController =  new Leap.Controller({enableGestures: false});
+		lc.on('connect', function()
+		{
+			isServerConnected = true;
+			updateInfo();
+		});
+		lc.on('deviceConnected', function()
+		{
+			lb.isConnected = true;
+			updateInfo();
+		});
+		lc.on('deviceDisconnected', function()
+		{
+			lb.isConnected = false;
+			updateInfo();
+		});
+		lc.on('frame', function(frame)
+		{
+			if(!lb.isConnected) return;
+		  hand = frame.hands[0];
+			if(typeof hand === 'undefined')
+			{
+				if(lb.hasHands)
+				{
+					lb.hasHands = false;
+					updateInfo();
+				}
+				lb.palmNormal = [0, 0, 0];
+			}
+			else
+			{
+				if(!lb.hasHands)
+				{
+					lb.hasHands = true;
+					updateInfo();
+				}
+				lb.palmNormal = hand.palmNormal;
+			}
+		});
+		lc.connect();
+	}
+
+	function onKeyDown(event)
+	{
+		switch(event.keyCode)
 		{
 			case 38: /*up*/	self.key.forward = true; break;
 
@@ -134,9 +268,9 @@ bkcore.hexgl.ShipControls = function(domElement)
 		}
 	};
 
-	function onKeyUp(event) 
+	function onKeyUp(event)
 	{
-		switch(event.keyCode) 
+		switch(event.keyCode)
 		{
 			case 38: /*up*/	self.key.forward = false; break;
 
@@ -186,13 +320,28 @@ bkcore.hexgl.ShipControls.prototype.reset = function(position, rotation)
 
 	this.dummy.matrix.setPosition(this.dummy.position);
 	this.dummy.matrix.setRotationFromQuaternion(this.dummy.quaternion);
-	
+
 	this.mesh.matrix.identity();
 	this.mesh.applyMatrix(this.dummy.matrix);
 }
 
+bkcore.hexgl.ShipControls.prototype.terminate = function()
+{
+	this.destroy();
+
+	if(this.leapController != null)
+	{
+		this.leapController.disconnect();
+		this.leapInfo.style.display = 'none';
+	}
+}
+
 bkcore.hexgl.ShipControls.prototype.destroy = function()
 {
+	bkcore.Audio.play('destroyed');
+	bkcore.Audio.stop('bg');
+	bkcore.Audio.stop('wind');
+
 	this.active = false;
 	this.destroyed = true;
 	this.collision.front = false;
@@ -200,9 +349,26 @@ bkcore.hexgl.ShipControls.prototype.destroy = function()
 	this.collision.right = false;
 }
 
+bkcore.hexgl.ShipControls.prototype.fall = function()
+{
+	this.active = false;
+	this.collision.front = false;
+	this.collision.left = false;
+	this.collision.right = false;
+	this.falling = true;
+	_this = this;
+	setTimeout(function(){
+		_this.destroyed = true;
+	}, 1500);
+}
+
 bkcore.hexgl.ShipControls.prototype.update = function(dt)
 {
-	if(!this.active) return;
+	if(this.falling)
+	{
+		this.mesh.position.addSelf(this.fallVector);
+		return;
+	}
 
 	this.rotation.y = 0;
 	this.movement.set(0,0,0);
@@ -211,46 +377,81 @@ bkcore.hexgl.ShipControls.prototype.update = function(dt)
 
 	var rollAmount = 0.0;
 	var angularAmount = 0.0;
+	var yawLeap = 0.0;
 
-	if(this.key.forward)
-		this.speed += this.thrust * dt;
-	else
-		this.speed -= this.airResist * dt;
-	if(this.key.left)
+	if(this.leapBridge != null && this.leapBridge.hasHands)
 	{
-		angularAmount += this.angularSpeed * dt;
-		rollAmount -= this.rollAngle;
+		rollAmount -= this.leapBridge.palmNormal[0] * 3.5 * this.rollAngle;
+		yawLeap = -this.leapBridge.palmNormal[2] * 0.6;
 	}
-	if(this.key.right)
+
+	if(this.active)
 	{
-		angularAmount -= this.angularSpeed * dt;
-		rollAmount += this.rollAngle;
-	}
-	if(this.key.ltrigger)
-	{
-		if(this.key.left)
-			angularAmount += this.airAngularSpeed * dt;
+
+		if(this.touchController != null)
+		{
+			angularAmount -= this.touchController.stickVector.x/100 * this.angularSpeed * dt;
+			rollAmount += this.touchController.stickVector.x/100 * this.rollAngle;
+		}
+		else if(this.orientationController != null)
+		{
+			angularAmount += this.orientationController.beta/45 * this.angularSpeed * dt;
+			rollAmount -= this.orientationController.beta/45 * this.rollAngle;
+		}
+		else if(this.gamepadController != null && this.gamepadController.updateAvailable())
+		{
+			angularAmount -= this.gamepadController.lstickx * this.angularSpeed * dt;
+			rollAmount += this.gamepadController.lstickx * this.rollAngle;
+		}
+		else if(this.leapBridge != null && this.leapBridge.hasHands)
+		{
+			angularAmount += this.leapBridge.palmNormal[0] * 2 * this.angularSpeed * dt;
+			this.speed += Math.max(0.0, (0.5 + this.leapBridge.palmNormal[2])) * 3 * this.thrust * dt;
+		}
 		else
-			angularAmount += this.airAngularSpeed * 0.5 * dt;
-		this.speed -= this.airBrake * dt;
-		this.drift += (this.airDrift - this.drift) * this.driftLerp;
-		this.movement.x += this.speed * this.drift * dt;
-		if(this.drift > 0.0)
-			this.movement.z -= this.speed * this.drift * dt;
-		rollAmount -= this.rollAngle * 0.7;
-	}
-	if(this.key.rtrigger)
-	{
-		if(this.key.right)
-			angularAmount -= this.airAngularSpeed * dt;
+		{
+			if(this.key.left)
+			{
+				angularAmount += this.angularSpeed * dt;
+				rollAmount -= this.rollAngle;
+			}
+			if(this.key.right)
+			{
+				angularAmount -= this.angularSpeed * dt;
+				rollAmount += this.rollAngle;
+			}
+		}
+
+		if(this.key.forward)
+			this.speed += this.thrust * dt;
 		else
-			angularAmount -= this.airAngularSpeed * 0.5 * dt;
-		this.speed -= this.airBrake * dt;
-		this.drift += (-this.airDrift - this.drift) * this.driftLerp;
-		this.movement.x += this.speed * this.drift * dt;
-		if(this.drift < 0.0)
-			this.movement.z += this.speed * this.drift * dt;
-		rollAmount += this.rollAngle * 0.7;
+			this.speed -= this.airResist * dt;
+		if(this.key.ltrigger)
+		{
+			if(this.key.left)
+				angularAmount += this.airAngularSpeed * dt;
+			else
+				angularAmount += this.airAngularSpeed * 0.5 * dt;
+			this.speed -= this.airBrake * dt;
+			this.drift += (this.airDrift - this.drift) * this.driftLerp;
+			this.movement.x += this.speed * this.drift * dt;
+			if(this.drift > 0.0)
+				this.movement.z -= this.speed * this.drift * dt;
+			rollAmount -= this.rollAngle * 0.7;
+		}
+		if(this.key.rtrigger)
+		{
+			if(this.key.right)
+				angularAmount -= this.airAngularSpeed * dt;
+			else
+				angularAmount -= this.airAngularSpeed * 0.5 * dt;
+			this.speed -= this.airBrake * dt;
+			this.drift += (-this.airDrift - this.drift) * this.driftLerp;
+			this.movement.x += this.speed * this.drift * dt;
+			if(this.drift < 0.0)
+				this.movement.z += this.speed * this.drift * dt;
+			rollAmount += this.rollAngle * 0.7;
+		}
 	}
 
 	this.angular += (angularAmount - this.angular) * this.angularLerp;
@@ -306,7 +507,7 @@ bkcore.hexgl.ShipControls.prototype.update = function(dt)
 		this.mesh.matrix.identity();
 
 		// Gradient (Mesh only, no dummy physics impact)
-		var gradientDelta = (this.gradientTarget - this.gradient) * this.gradientLerp;
+		var gradientDelta = (this.gradientTarget - (yawLeap + this.gradient)) * this.gradientLerp;
 		if(Math.abs(gradientDelta) > this.epsilon) this.gradient += gradientDelta;
 		if(Math.abs(this.gradient) > this.epsilon)
 		{
@@ -335,7 +536,50 @@ bkcore.hexgl.ShipControls.prototype.update = function(dt)
 		this.mesh.applyMatrix(this.dummy.matrix);
 		this.mesh.updateMatrixWorld(true);
 	}
+
+	//Update listener position
+	bkcore.Audio.setListenerPos(this.movement);
+	bkcore.Audio.setListenerVelocity(this.currentVelocity);
 };
+
+bkcore.hexgl.ShipControls.prototype.teleport = function(pos, quat)
+{
+	this.quaternion.copy(quat);
+	this.dummy.quaternion.copy(this.quaternion);
+
+	this.dummy.position.copy(pos);
+	this.dummy.matrix.setPosition(this.dummy.position);
+
+	//console.log(pos.x, pos.y, pos.z);
+
+	this.dummy.matrix.setRotationFromQuaternion(this.dummy.quaternion);
+
+	if(this.mesh != null)
+	{
+		this.mesh.matrix.identity();
+
+		// Gradient (Mesh only, no dummy physics impact)
+		var gradientDelta = (this.gradientTarget - this.gradient) * this.gradientLerp;
+		if(Math.abs(gradientDelta) > this.epsilon) this.gradient += gradientDelta;
+		if(Math.abs(this.gradient) > this.epsilon)
+		{
+			this.gradientAxis.set(1,0,0);
+			this.mesh.matrix.rotateByAxis(this.gradientAxis, this.gradient);
+		}
+
+		// Tilting (Idem)
+		var tiltDelta = (this.tiltTarget - this.tilt) * this.tiltLerp;
+		if(Math.abs(tiltDelta) > this.epsilon) this.tilt += tiltDelta;
+		if(Math.abs(this.tilt) > this.epsilon)
+		{
+			this.tiltAxis.set(0,0,1);
+			this.mesh.matrix.rotateByAxis(this.tiltAxis, this.tilt);
+		}
+
+		this.mesh.applyMatrix(this.dummy.matrix);
+		this.mesh.updateMatrixWorld(true);
+	}
+}
 
 bkcore.hexgl.ShipControls.prototype.boosterCheck = function(dt)
 {
@@ -343,8 +587,10 @@ bkcore.hexgl.ShipControls.prototype.boosterCheck = function(dt)
 		return false;
 
 	this.boost -= this.boosterDecay * dt;
-	if(this.boost < 0)
+	if(this.boost < 0){
 		this.boost = 0.0;
+		bkcore.Audio.stop('boost');
+	}
 
 	var x = Math.round(this.collisionMap.pixels.width/2 + this.dummy.position.x * this.collisionPixelRatio);
 	var z = Math.round(this.collisionMap.pixels.height/2 + this.dummy.position.z * this.collisionPixelRatio);
@@ -352,8 +598,10 @@ bkcore.hexgl.ShipControls.prototype.boosterCheck = function(dt)
 
 	var color = this.collisionMap.getPixel(x, z);
 
-	if(color.r == 255 && color.g < 127 && color.b < 127)
+	if(color.r == 255 && color.g < 127 && color.b < 127) {
+		bkcore.Audio.play('boost');
 		this.boost = this.boosterSpeed;
+	}
 
 	this.movement.z += this.boost * dt;
 }
@@ -380,6 +628,8 @@ bkcore.hexgl.ShipControls.prototype.collisionCheck = function(dt)
 
 	if(collision.r < 255)
 	{
+		bkcore.Audio.play('crash');
+
 		// Shield
 		var sr = (this.getRealSpeed() / this.maxSpeed);
 		this.shield -= sr * sr * 0.8 * this.shieldDamage;
@@ -396,9 +646,9 @@ bkcore.hexgl.ShipControls.prototype.collisionCheck = function(dt)
 		var rPos = this.repulsionVRight.addSelf(pos);
 		var lCol = this.collisionMap.getPixel(Math.round(lPos.x), Math.round(lPos.z)).r;
 		var rCol = this.collisionMap.getPixel(Math.round(rPos.x), Math.round(rPos.z)).r;
-		
-		this.repulsionAmount = Math.max(0.8, 
-			Math.min(this.repulsionCap, 
+
+		this.repulsionAmount = Math.max(0.8,
+			Math.min(this.repulsionCap,
 				this.speed * this.repulsionRatio
 				)
 			);
@@ -419,6 +669,17 @@ bkcore.hexgl.ShipControls.prototype.collisionCheck = function(dt)
 			this.repulsionForce.z += -this.repulsionAmount*4;
 			this.collision.front = true;
 			this.speed = 0;
+		}
+
+		// DIRTY GAMEOVER
+		if(rCol < 128 && lCol < 128)
+		{
+			var fCol = this.collisionMap.getPixel(Math.round(pos.x+2), Math.round(pos.z+2)).r;
+			if(fCol < 128)
+			{
+				console.log('GAMEOVER');
+				this.fall();
+			}
 		}
 
 		this.speed *= this.collisionSpeedDecrease;
@@ -488,7 +749,7 @@ bkcore.hexgl.ShipControls.prototype.heightCheck = function(dt)
 		x = this.heightMap.pixels.width/2 + this.tiltVector.x * this.heightPixelRatio;
 		z = this.heightMap.pixels.height/2 + this.tiltVector.z * this.heightPixelRatio;
 
-		nheight = this.heightMap.getPixelFBilinear(x, z) / this.heightScale + this.heightBias;		
+		nheight = this.heightMap.getPixelFBilinear(x, z) / this.heightScale + this.heightBias;
 	}
 
 	if(nheight < 16777)
@@ -506,7 +767,7 @@ bkcore.hexgl.ShipControls.prototype.getRealSpeed = function(scale)
 bkcore.hexgl.ShipControls.prototype.getRealSpeedRatio = function()
 {
 	return Math.min(
-		this.maxSpeed, 
+		this.maxSpeed,
 		this.speed+this.boost
 	) / this.maxSpeed;
 };
@@ -533,3 +794,13 @@ bkcore.hexgl.ShipControls.prototype.getShield = function(scale)
 		* (scale == undefined ? 1 : scale)
 	);
 };
+
+bkcore.hexgl.ShipControls.prototype.getPosition = function()
+{
+	return this.dummy.position;
+}
+
+bkcore.hexgl.ShipControls.prototype.getQuaternion = function()
+{
+	return this.dummy.quaternion;
+}
